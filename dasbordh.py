@@ -15,32 +15,41 @@ st.title("📊 Dashboard ERP - Ofensores e Produtividade")
 st.caption("Envie o CSV unificado do ERP. O dashboard classifica tudo automaticamente.")
 
 
-# =========================
-# LEITURA CSV
-# =========================
-
 def ler_csv(arquivo):
     tentativas = [
         {"sep": ";", "encoding": "utf-8-sig"},
         {"sep": ";", "encoding": "latin1"},
         {"sep": ",", "encoding": "utf-8-sig"},
         {"sep": ",", "encoding": "latin1"},
-        {"sep": None, "encoding": "utf-8-sig"},
-        {"sep": None, "encoding": "latin1"},
+        {"sep": "\t", "encoding": "utf-8-sig"},
+        {"sep": "\t", "encoding": "latin1"},
     ]
+
+    melhor_df = None
 
     for config in tentativas:
         try:
             arquivo.seek(0)
-            return pd.read_csv(
+            df_temp = pd.read_csv(
                 arquivo,
                 sep=config["sep"],
                 encoding=config["encoding"],
-                engine="python",
-                dtype=str
+                dtype=str,
+                low_memory=False,
+                on_bad_lines="skip"
             )
+
+            if melhor_df is None or len(df_temp.columns) > len(melhor_df.columns):
+                melhor_df = df_temp
+
+            if "descricao" in df_temp.columns and len(df_temp.columns) > 20:
+                return df_temp
+
         except Exception:
             pass
+
+    if melhor_df is not None:
+        return melhor_df
 
     raise ValueError("Não foi possível ler o CSV.")
 
@@ -51,7 +60,6 @@ def limpar_texto(texto):
 
     texto = str(texto).lower()
     texto = unidecode(texto)
-
     texto = re.sub(r"http\S+", " ", texto)
     texto = re.sub(r"www\S+", " ", texto)
     texto = re.sub(r"\b\d{1,2}h\d{0,2}\b", " ", texto)
@@ -63,52 +71,20 @@ def limpar_texto(texto):
     return texto
 
 
-# =========================
-# CLASSIFICAÇÃO DE OFENSORES
-# =========================
-
 def classificar_ofensor(descricao):
     texto = limpar_texto(descricao)
 
     regras = [
-        ("Nobreak", [
-            "nobreak", "no-break", "ups", "nhs", "bateria", "autonomia"
-        ]),
-        ("Link / Internet", [
-            "sem internet", "internet", "link", "wan", "fibra", "operadora",
-            "circuito", "indisponivel", "indisponibilidade", "queda de link"
-        ]),
-        ("Firewall", [
-            "firewall", "er605", "er7206", "er7212", "fortinet", "palo alto",
-            "vpn", "nat"
-        ]),
-        ("Switch", [
-            "switch", "sg2210", "sg3428", "sg2016", "es210", "porta poe",
-            "poe"
-        ]),
-        ("Access Point / Wi-Fi", [
-            "access point", "wifi", "wi-fi", "eap", "ap offline", "ssid",
-            "sinal wireless", "rede sem fio"
-        ]),
-        ("Controladora Omada", [
-            "oc200", "omada", "controladora", "controller"
-        ]),
-        ("Energia", [
-            "energia", "sem energia", "queda de energia", "tomada",
-            "disjuntor", "eletrica", "elétrica"
-        ]),
-        ("Cabeamento", [
-            "cabeamento", "cabo rompido", "cabo de rede", "rj45",
-            "conector", "patch cord", "infra"
-        ]),
-        ("Configuração", [
-            "vlan", "dhcp", "dns", "ip", "rota", "gateway", "configuracao",
-            "configuração", "senha", "portal", "captive"
-        ]),
-        ("Hardware / Equipamento", [
-            "queimado", "queimada", "defeito", "travado", "travada",
-            "nao liga", "não liga", "fonte", "reiniciando"
-        ]),
+        ("Nobreak", ["nobreak", "no-break", "ups", "nhs", "bateria"]),
+        ("Link / Internet", ["sem internet", "internet", "link", "wan", "fibra", "operadora", "circuito", "indisponivel"]),
+        ("Firewall", ["firewall", "er605", "er7206", "er7212", "fortinet", "palo alto", "vpn", "nat"]),
+        ("Switch", ["switch", "sg2210", "sg3428", "sg2016", "es210", "porta poe", "poe"]),
+        ("Access Point / Wi-Fi", ["access point", "wifi", "wi-fi", "eap", "ap offline", "ssid", "wireless"]),
+        ("Controladora Omada", ["oc200", "omada", "controladora", "controller"]),
+        ("Energia", ["energia", "sem energia", "queda de energia", "tomada", "disjuntor", "eletrica"]),
+        ("Cabeamento", ["cabeamento", "cabo rompido", "cabo de rede", "rj45", "conector", "patch cord"]),
+        ("Configuração", ["vlan", "dhcp", "dns", "ip", "rota", "gateway", "configuracao", "senha", "portal"]),
+        ("Hardware / Equipamento", ["queimado", "queimada", "defeito", "travado", "travada", "nao liga", "fonte", "reiniciando"]),
     ]
 
     for categoria, palavras in regras:
@@ -118,10 +94,6 @@ def classificar_ofensor(descricao):
 
     return "Outros / Não classificado"
 
-
-# =========================
-# CLASSIFICAÇÃO RESULTADO
-# =========================
 
 def classificar_resultado(row):
     campos = [
@@ -136,39 +108,23 @@ def classificar_resultado(row):
     texto = " ".join(str(row.get(c, "")) for c in campos)
     texto = limpar_texto(texto)
 
-    if any(p in texto for p in [
-        "cancelado", "cancelada", "cancelamento"
-    ]):
+    if any(p in texto for p in ["cancelado", "cancelada", "cancelamento"]):
         return "Cancelado"
 
-    if any(p in texto for p in [
-        "no show", "noshow", "nao compareceu", "tecnico nao foi",
-        "tecnico nao compareceu", "ausencia tecnico", "ausencia do tecnico"
-    ]):
+    if any(p in texto for p in ["no show", "noshow", "nao compareceu", "tecnico nao foi", "tecnico nao compareceu"]):
         return "No-show técnico"
 
-    if any(p in texto for p in [
-        "improdutivo", "improdutiva", "improd"
-    ]):
+    if any(p in texto for p in ["improdutivo", "improdutiva", "improd"]):
         return "Improdutivo"
 
-    if any(p in texto for p in [
-        "produtivo", "produtiva", "concluido", "concluida",
-        "finalizado", "finalizada", "resolvido", "resolvida"
-    ]):
+    if any(p in texto for p in ["produtivo", "produtiva", "concluido", "finalizado", "resolvido"]):
         return "Produtivo"
 
-    if any(p in texto for p in [
-        "aberto", "andamento", "pendente", "agendado", "aguardando"
-    ]):
+    if any(p in texto for p in ["aberto", "andamento", "pendente", "agendado", "aguardando"]):
         return "Aberto / Em andamento"
 
     return "Não identificado"
 
-
-# =========================
-# DATA / MÊS
-# =========================
 
 def preparar_data(df):
     colunas_data = [
@@ -182,15 +138,12 @@ def preparar_data(df):
         if coluna in df.columns:
             df["data_base"] = pd.to_datetime(df[coluna], errors="coerce", dayfirst=True)
             df["mes"] = df["data_base"].dt.strftime("%Y-%m")
+            df["mes"] = df["mes"].fillna("Sem data")
             return df, coluna
 
-    df["mes"] = "Não identificado"
+    df["mes"] = "Sem data"
     return df, None
 
-
-# =========================
-# APP
-# =========================
 
 arquivo = st.file_uploader("📂 Envie o CSV unificado do ERP", type=["csv"])
 
@@ -199,27 +152,33 @@ if not arquivo:
     st.stop()
 
 try:
-    df = ler_csv(arquivo)
+    df_original = ler_csv(arquivo)
 except Exception as e:
     st.error(f"Erro ao ler CSV: {e}")
     st.stop()
 
-if "descricao" not in df.columns:
+st.info(f"Linhas lidas do CSV: **{len(df_original):,}** | Colunas: **{len(df_original.columns)}**".replace(",", "."))
+
+if "descricao" not in df_original.columns:
     st.error("A coluna `descricao` não foi encontrada no CSV.")
+    st.write("Colunas encontradas:")
+    st.write(df_original.columns.tolist())
     st.stop()
 
-df, coluna_data_usada = preparar_data(df)
+df_original, coluna_data_usada = preparar_data(df_original)
 
-df["ofensor"] = df["descricao"].apply(classificar_ofensor)
-df["resultado_atendimento"] = df.apply(classificar_resultado, axis=1)
+df_original["ofensor"] = df_original["descricao"].apply(classificar_ofensor)
+df_original["resultado_atendimento"] = df_original.apply(classificar_resultado, axis=1)
+
+df = df_original.copy()
 
 st.sidebar.header("🔎 Filtros")
 
-if "mes" in df.columns:
-    meses = sorted(df["mes"].dropna().unique())
-    filtro_mes = st.sidebar.multiselect("Mês", meses, default=meses)
-    if filtro_mes:
-        df = df[df["mes"].isin(filtro_mes)]
+meses = sorted(df["mes"].dropna().unique())
+filtro_mes = st.sidebar.multiselect("Mês", meses)
+
+if filtro_mes:
+    df = df[df["mes"].isin(filtro_mes)]
 
 if "cliente" in df.columns:
     clientes = sorted(df["cliente"].dropna().unique())
@@ -235,12 +194,11 @@ if "estado_cliente" in df.columns:
 
 resultados = sorted(df["resultado_atendimento"].dropna().unique())
 filtro_resultado = st.sidebar.multiselect("Resultado", resultados)
+
 if filtro_resultado:
     df = df[df["resultado_atendimento"].isin(filtro_resultado)]
 
-# =========================
-# KPIs
-# =========================
+st.info(f"Linhas após filtros: **{len(df):,}**".replace(",", "."))
 
 total = len(df)
 produtivos = (df["resultado_atendimento"] == "Produtivo").sum()
@@ -262,10 +220,6 @@ col5.metric("👷 No-show", f"{noshow:,}".replace(",", "."))
 st.metric("📈 Taxa de produtividade", f"{taxa_produtividade:.2f}%")
 
 st.divider()
-
-# =========================
-# GRÁFICOS
-# =========================
 
 col_a, col_b = st.columns([2, 1])
 
@@ -315,6 +269,7 @@ with col_c:
     )
 
     st.bar_chart(chamados_mes.set_index("mes")["quantidade"])
+    st.dataframe(chamados_mes, use_container_width=True, hide_index=True)
 
 with col_d:
     st.subheader("🚨 Ofensor x Resultado")
@@ -332,6 +287,7 @@ st.subheader("🔎 Detalhamento dos chamados")
 
 colunas_detalhe = [
     c for c in [
+        "id",
         "num_chamado",
         "mes",
         "cliente",
@@ -349,10 +305,6 @@ colunas_detalhe = [
 st.dataframe(df[colunas_detalhe], use_container_width=True)
 
 st.divider()
-
-# =========================
-# EXPORTAÇÃO
-# =========================
 
 csv_buffer = io.StringIO()
 df.to_csv(csv_buffer, index=False, sep=";", encoding="utf-8-sig")
