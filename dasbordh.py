@@ -24,7 +24,7 @@ st.set_page_config(
 # Link direto:
 # https://drive.google.com/uc?export=download&id=ID_DO_ARQUIVO
 
-URL_CSV = "COLE_AQUI_O_LINK_DIRETO_DO_CSV"
+URL_CSV = "https://drive.google.com/drive/folders/1tODDjplMJB51wbeIhdcfYHNabOD-n0Dc?usp=sharing"
 
 
 # ==================================================
