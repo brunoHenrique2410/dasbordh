@@ -102,8 +102,7 @@ def baixar_csvs_drive(url_pasta):
         url=url_pasta,
         output=pasta_temp,
         quiet=True,
-        use_cookies=False,
-        remaining_ok=True
+        use_cookies=False
     )
 
     arquivos_csv = sorted(Path(pasta_temp).glob("*.csv"))
