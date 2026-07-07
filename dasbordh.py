@@ -1,8 +1,11 @@
 import io
 import re
+import unicodedata
+from io import BytesIO
+
 import pandas as pd
+import requests
 import streamlit as st
-from unidecode import unidecode
 
 
 st.set_page_config(
@@ -11,11 +14,59 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("📊 Dashboard ERP - Ofensores e Produtividade")
-st.caption("Envie o CSV unificado do ERP. O dashboard classifica tudo automaticamente.")
+# ==================================================
+# COLE AQUI O LINK DO CSV NA NUVEM
+# ==================================================
+# Google Drive exemplo:
+# Link normal:
+# https://drive.google.com/file/d/ID_DO_ARQUIVO/view?usp=sharing
+#
+# Link direto:
+# https://drive.google.com/uc?export=download&id=ID_DO_ARQUIVO
+
+URL_CSV = "COLE_AQUI_O_LINK_DIRETO_DO_CSV"
 
 
-def ler_csv(arquivo):
+# ==================================================
+# FUNÇÕES
+# ==================================================
+
+def remover_acentos(texto):
+    texto = str(texto)
+    return "".join(
+        c for c in unicodedata.normalize("NFD", texto)
+        if unicodedata.category(c) != "Mn"
+    )
+
+
+def limpar_texto(texto):
+    if pd.isna(texto):
+        return ""
+
+    texto = str(texto).lower()
+    texto = remover_acentos(texto)
+
+    texto = re.sub(r"http\S+", " ", texto)
+    texto = re.sub(r"www\S+", " ", texto)
+    texto = re.sub(r"\b\d{1,2}h\d{0,2}\b", " ", texto)
+    texto = re.sub(r"\b\d{1,2}:\d{2}\b", " ", texto)
+    texto = re.sub(r"\b\d{2}/\d{2}/\d{4}\b", " ", texto)
+    texto = re.sub(r"[^a-z0-9\s\-]", " ", texto)
+    texto = re.sub(r"\s+", " ", texto).strip()
+
+    return texto
+
+
+@st.cache_data(ttl=600)
+def baixar_csv(url):
+    resposta = requests.get(url, timeout=120)
+    resposta.raise_for_status()
+    return resposta.content
+
+
+def ler_csv_bytes(conteudo):
+    arquivo = BytesIO(conteudo)
+
     tentativas = [
         {"sep": ";", "encoding": "utf-8-sig"},
         {"sep": ";", "encoding": "latin1"},
@@ -30,6 +81,7 @@ def ler_csv(arquivo):
     for config in tentativas:
         try:
             arquivo.seek(0)
+
             df_temp = pd.read_csv(
                 arquivo,
                 sep=config["sep"],
@@ -51,45 +103,56 @@ def ler_csv(arquivo):
     if melhor_df is not None:
         return melhor_df
 
-    raise ValueError("Não foi possível ler o CSV.")
-
-
-def limpar_texto(texto):
-    if pd.isna(texto):
-        return ""
-
-    texto = str(texto).lower()
-    texto = unidecode(texto)
-    texto = re.sub(r"http\S+", " ", texto)
-    texto = re.sub(r"www\S+", " ", texto)
-    texto = re.sub(r"\b\d{1,2}h\d{0,2}\b", " ", texto)
-    texto = re.sub(r"\b\d{1,2}:\d{2}\b", " ", texto)
-    texto = re.sub(r"\b\d{2}/\d{2}/\d{4}\b", " ", texto)
-    texto = re.sub(r"[^a-z0-9\s\-]", " ", texto)
-    texto = re.sub(r"\s+", " ", texto).strip()
-
-    return texto
+    raise ValueError("Não foi possível ler o CSV baixado da nuvem.")
 
 
 def classificar_ofensor(descricao):
     texto = limpar_texto(descricao)
 
     regras = [
-        ("Nobreak", ["nobreak", "no-break", "ups", "nhs", "bateria"]),
-        ("Link / Internet", ["sem internet", "internet", "link", "wan", "fibra", "operadora", "circuito", "indisponivel"]),
-        ("Firewall", ["firewall", "er605", "er7206", "er7212", "fortinet", "palo alto", "vpn", "nat"]),
-        ("Switch", ["switch", "sg2210", "sg3428", "sg2016", "es210", "porta poe", "poe"]),
-        ("Access Point / Wi-Fi", ["access point", "wifi", "wi-fi", "eap", "ap offline", "ssid", "wireless"]),
-        ("Controladora Omada", ["oc200", "omada", "controladora", "controller"]),
-        ("Energia", ["energia", "sem energia", "queda de energia", "tomada", "disjuntor", "eletrica"]),
-        ("Cabeamento", ["cabeamento", "cabo rompido", "cabo de rede", "rj45", "conector", "patch cord"]),
-        ("Configuração", ["vlan", "dhcp", "dns", "ip", "rota", "gateway", "configuracao", "senha", "portal"]),
-        ("Hardware / Equipamento", ["queimado", "queimada", "defeito", "travado", "travada", "nao liga", "fonte", "reiniciando"]),
+        ("Nobreak", [
+            "nobreak", "no-break", "ups", "nhs", "bateria", "autonomia"
+        ]),
+        ("Link / Internet", [
+            "sem internet", "internet", "link", "wan", "fibra", "operadora",
+            "circuito", "indisponivel", "indisponibilidade", "queda de link"
+        ]),
+        ("Firewall", [
+            "firewall", "er605", "er7206", "er7212", "fortinet",
+            "palo alto", "vpn", "nat"
+        ]),
+        ("Switch", [
+            "switch", "sg2210", "sg3428", "sg2016", "es210",
+            "porta poe", "poe"
+        ]),
+        ("Access Point / Wi-Fi", [
+            "access point", "wifi", "wi-fi", "eap", "ap offline",
+            "ssid", "wireless", "rede sem fio"
+        ]),
+        ("Controladora Omada", [
+            "oc200", "omada", "controladora", "controller"
+        ]),
+        ("Energia", [
+            "energia", "sem energia", "queda de energia", "tomada",
+            "disjuntor", "eletrica"
+        ]),
+        ("Cabeamento", [
+            "cabeamento", "cabo rompido", "cabo de rede", "rj45",
+            "conector", "patch cord", "infra"
+        ]),
+        ("Configuração", [
+            "vlan", "dhcp", "dns", "ip", "rota", "gateway",
+            "configuracao", "senha", "portal", "captive"
+        ]),
+        ("Hardware / Equipamento", [
+            "queimado", "queimada", "defeito", "travado", "travada",
+            "nao liga", "fonte", "reiniciando"
+        ]),
     ]
 
     for categoria, palavras in regras:
         for palavra in palavras:
-            if palavra in texto:
+            if limpar_texto(palavra) in texto:
                 return categoria
 
     return "Outros / Não classificado"
@@ -102,25 +165,48 @@ def classificar_resultado(row):
         "ocasiao_fechamento",
         "motivo_improdutivo",
         "justificativa_ocasiao_fechamento",
-        "descricao_fechamento"
+        "descricao_fechamento",
     ]
 
     texto = " ".join(str(row.get(c, "")) for c in campos)
     texto = limpar_texto(texto)
 
-    if any(p in texto for p in ["cancelado", "cancelada", "cancelamento"]):
+    if any(p in texto for p in [
+        "cancelado", "cancelada", "cancelamento"
+    ]):
         return "Cancelado"
 
-    if any(p in texto for p in ["no show", "noshow", "nao compareceu", "tecnico nao foi", "tecnico nao compareceu"]):
+    if any(p in texto for p in [
+        "no show",
+        "noshow",
+        "nao compareceu",
+        "tecnico nao foi",
+        "tecnico nao compareceu",
+        "ausencia tecnico",
+        "ausencia do tecnico",
+    ]):
         return "No-show técnico"
 
-    if any(p in texto for p in ["improdutivo", "improdutiva", "improd"]):
+    if any(p in texto for p in [
+        "improdutivo", "improdutiva", "improd"
+    ]):
         return "Improdutivo"
 
-    if any(p in texto for p in ["produtivo", "produtiva", "concluido", "finalizado", "resolvido"]):
+    if any(p in texto for p in [
+        "produtivo",
+        "produtiva",
+        "concluido",
+        "concluida",
+        "finalizado",
+        "finalizada",
+        "resolvido",
+        "resolvida",
+    ]):
         return "Produtivo"
 
-    if any(p in texto for p in ["aberto", "andamento", "pendente", "agendado", "aguardando"]):
+    if any(p in texto for p in [
+        "aberto", "andamento", "pendente", "agendado", "aguardando"
+    ]):
         return "Aberto / Em andamento"
 
     return "Não identificado"
@@ -131,33 +217,51 @@ def preparar_data(df):
         "data_hora_solicitacao",
         "data_registro",
         "data_hora_inicio_atendimento",
-        "data_hora_fim_atendimento"
+        "data_hora_fim_atendimento",
     ]
 
     for coluna in colunas_data:
         if coluna in df.columns:
-            df["data_base"] = pd.to_datetime(df[coluna], errors="coerce", dayfirst=True)
+            df["data_base"] = pd.to_datetime(
+                df[coluna],
+                errors="coerce",
+                dayfirst=True
+            )
+
             df["mes"] = df["data_base"].dt.strftime("%Y-%m")
             df["mes"] = df["mes"].fillna("Sem data")
+
             return df, coluna
 
     df["mes"] = "Sem data"
     return df, None
 
 
-arquivo = st.file_uploader("📂 Envie o CSV unificado do ERP", type=["csv"])
+# ==================================================
+# APP
+# ==================================================
 
-if not arquivo:
-    st.warning("Envie o CSV unificado para gerar o dashboard.")
+st.title("📊 Dashboard ERP - Ofensores e Produtividade")
+st.caption("Base carregada automaticamente de um CSV na nuvem.")
+
+if URL_CSV == "COLE_AQUI_O_LINK_DIRETO_DO_CSV":
+    st.error("Configure a variável URL_CSV com o link direto do CSV.")
     st.stop()
 
 try:
-    df_original = ler_csv(arquivo)
+    conteudo_csv = baixar_csv(URL_CSV)
+    df_original = ler_csv_bytes(conteudo_csv)
 except Exception as e:
-    st.error(f"Erro ao ler CSV: {e}")
+    st.error(f"Erro ao baixar ou ler o CSV: {e}")
     st.stop()
 
-st.info(f"Linhas lidas do CSV: **{len(df_original):,}** | Colunas: **{len(df_original.columns)}**".replace(",", "."))
+st.success("Base carregada automaticamente da nuvem.")
+
+st.info(
+    f"Linhas lidas do CSV: **{len(df_original):,}** | "
+    f"Colunas: **{len(df_original.columns)}**"
+    .replace(",", ".")
+)
 
 if "descricao" not in df_original.columns:
     st.error("A coluna `descricao` não foi encontrada no CSV.")
@@ -165,12 +269,30 @@ if "descricao" not in df_original.columns:
     st.write(df_original.columns.tolist())
     st.stop()
 
+if "id" in df_original.columns:
+    antes = len(df_original)
+    df_original = df_original.drop_duplicates(subset=["id"], keep="first")
+    duplicados = antes - len(df_original)
+
+elif "num_chamado" in df_original.columns:
+    antes = len(df_original)
+    df_original = df_original.drop_duplicates(subset=["num_chamado"], keep="first")
+    duplicados = antes - len(df_original)
+
+else:
+    duplicados = 0
+
 df_original, coluna_data_usada = preparar_data(df_original)
 
 df_original["ofensor"] = df_original["descricao"].apply(classificar_ofensor)
 df_original["resultado_atendimento"] = df_original.apply(classificar_resultado, axis=1)
 
 df = df_original.copy()
+
+
+# ==================================================
+# FILTROS
+# ==================================================
 
 st.sidebar.header("🔎 Filtros")
 
@@ -183,12 +305,14 @@ if filtro_mes:
 if "cliente" in df.columns:
     clientes = sorted(df["cliente"].dropna().unique())
     filtro_cliente = st.sidebar.multiselect("Cliente", clientes)
+
     if filtro_cliente:
         df = df[df["cliente"].isin(filtro_cliente)]
 
 if "estado_cliente" in df.columns:
     estados = sorted(df["estado_cliente"].dropna().unique())
     filtro_estado = st.sidebar.multiselect("Estado", estados)
+
     if filtro_estado:
         df = df[df["estado_cliente"].isin(filtro_estado)]
 
@@ -198,7 +322,23 @@ filtro_resultado = st.sidebar.multiselect("Resultado", resultados)
 if filtro_resultado:
     df = df[df["resultado_atendimento"].isin(filtro_resultado)]
 
-st.info(f"Linhas após filtros: **{len(df):,}**".replace(",", "."))
+ofensores_filtro = sorted(df["ofensor"].dropna().unique())
+filtro_ofensor = st.sidebar.multiselect("Ofensor", ofensores_filtro)
+
+if filtro_ofensor:
+    df = df[df["ofensor"].isin(filtro_ofensor)]
+
+
+col_info1, col_info2, col_info3 = st.columns(3)
+
+col_info1.metric("Linhas finais", f"{len(df_original):,}".replace(",", "."))
+col_info2.metric("Duplicados removidos", f"{duplicados:,}".replace(",", "."))
+col_info3.metric("Linhas após filtros", f"{len(df):,}".replace(",", "."))
+
+
+# ==================================================
+# INDICADORES
+# ==================================================
 
 total = len(df)
 produtivos = (df["resultado_atendimento"] == "Produtivo").sum()
@@ -207,7 +347,12 @@ cancelados = (df["resultado_atendimento"] == "Cancelado").sum()
 noshow = (df["resultado_atendimento"] == "No-show técnico").sum()
 
 base_produtividade = produtivos + improdutivos
-taxa_produtividade = (produtivos / base_produtividade * 100) if base_produtividade else 0
+
+taxa_produtividade = (
+    produtivos / base_produtividade * 100
+    if base_produtividade > 0
+    else 0
+)
 
 col1, col2, col3, col4, col5 = st.columns(5)
 
@@ -220,6 +365,11 @@ col5.metric("👷 No-show", f"{noshow:,}".replace(",", "."))
 st.metric("📈 Taxa de produtividade", f"{taxa_produtividade:.2f}%")
 
 st.divider()
+
+
+# ==================================================
+# GRÁFICOS
+# ==================================================
 
 col_a, col_b = st.columns([2, 1])
 
@@ -236,11 +386,13 @@ with col_a:
 
     top_ofensores.columns = ["ofensor", "quantidade"]
 
-    st.bar_chart(top_ofensores.set_index("ofensor")["quantidade"])
+    if not top_ofensores.empty:
+        st.bar_chart(top_ofensores.set_index("ofensor")["quantidade"])
+
     st.dataframe(top_ofensores, use_container_width=True, hide_index=True)
 
 with col_b:
-    st.subheader("✅ Resultado")
+    st.subheader("✅ Resultado dos chamados")
 
     resultado_qtd = (
         df["resultado_atendimento"]
@@ -251,7 +403,9 @@ with col_b:
 
     resultado_qtd.columns = ["resultado", "quantidade"]
 
-    st.bar_chart(resultado_qtd.set_index("resultado")["quantidade"])
+    if not resultado_qtd.empty:
+        st.bar_chart(resultado_qtd.set_index("resultado")["quantidade"])
+
     st.dataframe(resultado_qtd, use_container_width=True, hide_index=True)
 
 st.divider()
@@ -268,7 +422,9 @@ with col_c:
         .sort_values("mes")
     )
 
-    st.bar_chart(chamados_mes.set_index("mes")["quantidade"])
+    if not chamados_mes.empty:
+        st.bar_chart(chamados_mes.set_index("mes")["quantidade"])
+
     st.dataframe(chamados_mes, use_container_width=True, hide_index=True)
 
 with col_d:
@@ -282,6 +438,11 @@ with col_d:
     st.dataframe(tabela, use_container_width=True, hide_index=True)
 
 st.divider()
+
+
+# ==================================================
+# DETALHAMENTO
+# ==================================================
 
 st.subheader("🔎 Detalhamento dos chamados")
 
@@ -297,7 +458,7 @@ colunas_detalhe = [
         "ofensor",
         "resultado_atendimento",
         "descricao",
-        "descricao_fechamento"
+        "descricao_fechamento",
     ]
     if c in df.columns
 ]
@@ -305,6 +466,11 @@ colunas_detalhe = [
 st.dataframe(df[colunas_detalhe], use_container_width=True)
 
 st.divider()
+
+
+# ==================================================
+# EXPORTAÇÃO
+# ==================================================
 
 csv_buffer = io.StringIO()
 df.to_csv(csv_buffer, index=False, sep=";", encoding="utf-8-sig")
