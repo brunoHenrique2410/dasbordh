@@ -1,12 +1,17 @@
 import io
 import re
+import tempfile
 import unicodedata
-from io import BytesIO
+from pathlib import Path
 
+import gdown
 import pandas as pd
-import requests
 import streamlit as st
 
+
+# ==================================================
+# CONFIGURAÇÃO
+# ==================================================
 
 st.set_page_config(
     page_title="Dashboard ERP - Ofensores",
@@ -14,21 +19,11 @@ st.set_page_config(
     layout="wide"
 )
 
-# ==================================================
-# COLE AQUI O LINK DO CSV NA NUVEM
-# ==================================================
-# Google Drive exemplo:
-# Link normal:
-# https://drive.google.com/file/d/ID_DO_ARQUIVO/view?usp=sharing
-#
-# Link direto:
-# https://drive.google.com/uc?export=download&id=ID_DO_ARQUIVO
-
-URL_CSV = "https://drive.google.com/drive/folders/1tODDjplMJB51wbeIhdcfYHNabOD-n0Dc?usp=sharing"
+URL_PASTA_DRIVE = "https://drive.google.com/drive/folders/1tODDjplMJB51wbeIhdcfYHNabOD-n0Dc?usp=sharing"
 
 
 # ==================================================
-# FUNÇÕES
+# FUNÇÕES DE TEXTO
 # ==================================================
 
 def remover_acentos(texto):
@@ -57,16 +52,11 @@ def limpar_texto(texto):
     return texto
 
 
-@st.cache_data(ttl=600)
-def baixar_csv(url):
-    resposta = requests.get(url, timeout=120)
-    resposta.raise_for_status()
-    return resposta.content
+# ==================================================
+# LEITURA DOS CSVs
+# ==================================================
 
-
-def ler_csv_bytes(conteudo):
-    arquivo = BytesIO(conteudo)
-
+def ler_csv_caminho(caminho):
     tentativas = [
         {"sep": ";", "encoding": "utf-8-sig"},
         {"sep": ";", "encoding": "latin1"},
@@ -80,10 +70,8 @@ def ler_csv_bytes(conteudo):
 
     for config in tentativas:
         try:
-            arquivo.seek(0)
-
             df_temp = pd.read_csv(
-                arquivo,
+                caminho,
                 sep=config["sep"],
                 encoding=config["encoding"],
                 dtype=str,
@@ -103,8 +91,64 @@ def ler_csv_bytes(conteudo):
     if melhor_df is not None:
         return melhor_df
 
-    raise ValueError("Não foi possível ler o CSV baixado da nuvem.")
+    raise ValueError(f"Não foi possível ler o arquivo {caminho.name}")
 
+
+@st.cache_data(ttl=600)
+def baixar_csvs_drive(url_pasta):
+    pasta_temp = tempfile.mkdtemp()
+
+    resultado = gdown.download_folder(
+        url=url_pasta,
+        output=pasta_temp,
+        quiet=True,
+        use_cookies=False,
+        remaining_ok=True
+    )
+
+    arquivos_csv = sorted(Path(pasta_temp).glob("*.csv"))
+
+    if not arquivos_csv:
+        raise ValueError(
+            "Nenhum CSV foi encontrado na pasta do Google Drive. "
+            "Confira se a pasta está pública e se os arquivos terminam com .csv."
+        )
+
+    bases = []
+    resumo = []
+
+    for arquivo in arquivos_csv:
+        df_temp = ler_csv_caminho(arquivo)
+        df_temp["arquivo_origem"] = arquivo.name
+        bases.append(df_temp)
+
+        resumo.append({
+            "arquivo": arquivo.name,
+            "linhas": len(df_temp),
+            "colunas": len(df_temp.columns)
+        })
+
+    df_final = pd.concat(bases, ignore_index=True, sort=False)
+
+    total_bruto = len(df_final)
+    duplicados_removidos = 0
+
+    if "id" in df_final.columns:
+        antes = len(df_final)
+        df_final = df_final.drop_duplicates(subset=["id"], keep="first")
+        duplicados_removidos = antes - len(df_final)
+
+    elif "num_chamado" in df_final.columns:
+        antes = len(df_final)
+        df_final = df_final.drop_duplicates(subset=["num_chamado"], keep="first")
+        duplicados_removidos = antes - len(df_final)
+
+    return df_final, resumo, total_bruto, duplicados_removidos
+
+
+# ==================================================
+# CLASSIFICAÇÕES
+# ==================================================
 
 def classificar_ofensor(descricao):
     texto = limpar_texto(descricao)
@@ -242,45 +286,33 @@ def preparar_data(df):
 # ==================================================
 
 st.title("📊 Dashboard ERP - Ofensores e Produtividade")
-st.caption("Base carregada automaticamente de um CSV na nuvem.")
-
-if URL_CSV == "COLE_AQUI_O_LINK_DIRETO_DO_CSV":
-    st.error("Configure a variável URL_CSV com o link direto do CSV.")
-    st.stop()
+st.caption("Base carregada automaticamente de uma pasta pública do Google Drive.")
 
 try:
-    conteudo_csv = baixar_csv(URL_CSV)
-    df_original = ler_csv_bytes(conteudo_csv)
+    df_original, resumo_arquivos, total_bruto, duplicados_removidos = baixar_csvs_drive(URL_PASTA_DRIVE)
 except Exception as e:
-    st.error(f"Erro ao baixar ou ler o CSV: {e}")
+    st.error(f"Erro ao baixar ou ler os CSVs do Google Drive: {e}")
     st.stop()
 
-st.success("Base carregada automaticamente da nuvem.")
+st.success("Base carregada automaticamente da pasta do Google Drive.")
 
-st.info(
-    f"Linhas lidas do CSV: **{len(df_original):,}** | "
-    f"Colunas: **{len(df_original.columns)}**"
-    .replace(",", ".")
-)
+col_info1, col_info2, col_info3 = st.columns(3)
+col_info1.metric("Linhas brutas", f"{total_bruto:,}".replace(",", "."))
+col_info2.metric("Duplicados removidos", f"{duplicados_removidos:,}".replace(",", "."))
+col_info3.metric("Linhas finais", f"{len(df_original):,}".replace(",", "."))
+
+with st.expander("📁 Arquivos carregados"):
+    st.dataframe(
+        pd.DataFrame(resumo_arquivos),
+        use_container_width=True,
+        hide_index=True
+    )
 
 if "descricao" not in df_original.columns:
-    st.error("A coluna `descricao` não foi encontrada no CSV.")
+    st.error("A coluna `descricao` não foi encontrada nos CSVs.")
     st.write("Colunas encontradas:")
     st.write(df_original.columns.tolist())
     st.stop()
-
-if "id" in df_original.columns:
-    antes = len(df_original)
-    df_original = df_original.drop_duplicates(subset=["id"], keep="first")
-    duplicados = antes - len(df_original)
-
-elif "num_chamado" in df_original.columns:
-    antes = len(df_original)
-    df_original = df_original.drop_duplicates(subset=["num_chamado"], keep="first")
-    duplicados = antes - len(df_original)
-
-else:
-    duplicados = 0
 
 df_original, coluna_data_usada = preparar_data(df_original)
 
@@ -329,13 +361,6 @@ if filtro_ofensor:
     df = df[df["ofensor"].isin(filtro_ofensor)]
 
 
-col_info1, col_info2, col_info3 = st.columns(3)
-
-col_info1.metric("Linhas finais", f"{len(df_original):,}".replace(",", "."))
-col_info2.metric("Duplicados removidos", f"{duplicados:,}".replace(",", "."))
-col_info3.metric("Linhas após filtros", f"{len(df):,}".replace(",", "."))
-
-
 # ==================================================
 # INDICADORES
 # ==================================================
@@ -353,6 +378,8 @@ taxa_produtividade = (
     if base_produtividade > 0
     else 0
 )
+
+st.info(f"Linhas após filtros: **{len(df):,}**".replace(",", "."))
 
 col1, col2, col3, col4, col5 = st.columns(5)
 
@@ -459,6 +486,7 @@ colunas_detalhe = [
         "resultado_atendimento",
         "descricao",
         "descricao_fechamento",
+        "arquivo_origem",
     ]
     if c in df.columns
 ]
